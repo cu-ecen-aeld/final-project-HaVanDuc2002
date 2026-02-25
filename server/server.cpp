@@ -11,7 +11,6 @@
  */
 
 #include <iostream>
-#include <fstream>
 #include <string>
 #include <vector>
 #include <cstring>
@@ -22,6 +21,7 @@
 #include <getopt.h>
 
 #include <unistd.h>
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <netinet/in.h>
@@ -190,18 +190,36 @@ static bool saveFrame(const Config& cfg, const FrameHeader& hdr,
              static_cast<unsigned long>(ntohll(hdr.seq)),
              ext.c_str());
 
-    std::ofstream file(filename, std::ios::binary);
-    if (!file) {
-        std::cerr << "[ERROR] Failed to open " << filename << " for writing\n";
+    // Open file with Linux system call
+    int fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) {
+        std::cerr << "[ERROR] Failed to open " << filename << " for writing: "
+                  << strerror(errno) << "\n";
         return false;
     }
 
-    file.write(reinterpret_cast<const char*>(data), len);
-    if (!file) {
-        std::cerr << "[ERROR] Failed to write frame data\n";
-        return false;
+    // Write data using Linux write() function
+    ssize_t written = 0;
+    ssize_t remaining = len;
+    const uint8_t* ptr = data;
+    
+    while (remaining > 0) {
+        ssize_t n = write(fd, ptr, remaining);
+        if (n < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            std::cerr << "[ERROR] Failed to write frame data: " 
+                      << strerror(errno) << "\n";
+            close(fd);
+            return false;
+        }
+        written += n;
+        ptr += n;
+        remaining -= n;
     }
 
+    close(fd);
     return true;
 }
 
