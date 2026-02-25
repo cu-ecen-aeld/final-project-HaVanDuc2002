@@ -87,6 +87,7 @@ openssl req -x509 -newkey rsa:4096 \
     --fps 30 \
     --host localhost \
     --port 4433 \
+    --ca certs/server.crt \
     --verbose
 ```
 
