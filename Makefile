@@ -47,15 +47,6 @@ all: check-deps $(OUT_DIR) client server
 $(OUT_DIR):
 	mkdir -p $(OUT_DIR)
 
-# Check dependencies
-check-deps:
-	@echo "Checking dependencies..."
-	@pkg-config --exists opencv4 2>/dev/null || pkg-config --exists opencv 2>/dev/null || \
-		(echo "ERROR: OpenCV not found. Install with: sudo apt-get install libopencv-dev" && exit 1)
-	@pkg-config --exists openssl 2>/dev/null || \
-		(echo "WARNING: OpenSSL pkg-config not found, using defaults")
-	@echo "Dependencies OK"
-
 # Client build
 client: $(OUT_DIR) $(CLIENT_TARGET)
 	@echo "Client built: $(CLIENT_TARGET)"
@@ -87,60 +78,6 @@ certs:
 		-subj '/CN=localhost'
 	@echo "Certificates created in $(CERT_DIR)/"
 
-# Debug build
-debug: CXXFLAGS += -DDEBUG -O0 -fsanitize=address,undefined
-debug: LDFLAGS += -fsanitize=address,undefined
-debug: clean all
-	@echo "Debug build complete"
-
-# Release build
-release: CXXFLAGS += -DNDEBUG -O3
-release: clean all
-	strip $(CLIENT_TARGET) $(SERVER_TARGET)
-	@echo "Release build complete"
-
-# Cross-compilation support for embedded Linux
-# Usage: make CROSS_COMPILE=arm-linux-gnueabihf-
-ifdef CROSS_COMPILE
-CXX = $(CROSS_COMPILE)g++
-# For cross-compilation, you may need to specify sysroot
-# CXXFLAGS += --sysroot=$(SYSROOT)
-# PKG_CONFIG_PATH and PKG_CONFIG_SYSROOT_DIR should be set
-endif
-
 clean:
 	rm -rf $(OUT_DIR)
 	@echo "Cleaned"
-
-# Help
-help:
-	@echo "Camera Frame Streamer - Build System (C++ / OpenCV)"
-	@echo ""
-	@echo "Targets:"
-	@echo "  all      - Build both client and server (default)"
-	@echo "  client   - Build camera_streamer client only"
-	@echo "  server   - Build frame_server only"
-	@echo "  certs    - Generate self-signed TLS certificates"
-	@echo "  debug    - Build with debug flags and sanitizers"
-	@echo "  release  - Build optimized release version"
-	@echo "  clean    - Remove build artifacts"
-	@echo ""
-	@echo "Cross-compilation (embedded Linux):"
-	@echo "  make CROSS_COMPILE=arm-linux-gnueabihf-"
-	@echo "  make CROSS_COMPILE=aarch64-linux-gnu-"
-	@echo ""
-	@echo "Dependencies:"
-	@echo "  - OpenCV (libopencv-dev)"
-	@echo "  - OpenSSL (libssl-dev)"
-	@echo "  - pkg-config"
-
-# Print configuration (useful for debugging build issues)
-info:
-	@echo "CXX: $(CXX)"
-	@echo "CXXFLAGS: $(CXXFLAGS)"
-	@echo "LDFLAGS: $(LDFLAGS)"
-	@echo "LIBS: $(LIBS)"
-	@echo "OPENCV_CFLAGS: $(OPENCV_CFLAGS)"
-	@echo "OPENCV_LIBS: $(OPENCV_LIBS)"
-	@echo "OPENSSL_CFLAGS: $(OPENSSL_CFLAGS)"
-	@echo "OPENSSL_LIBS: $(OPENSSL_LIBS)"
