@@ -1,6 +1,6 @@
 # Camera Frame Streamer (C++ / OpenCV)
 
-A camera frame streaming system over TLS, rewritten in modern C++ using OpenCV for camera capture.
+A camera frame streaming system over TLS, written in modern C++ using OpenCV for camera capture.
 
 ## Features
 
@@ -27,31 +27,11 @@ A camera frame streaming system over TLS, rewritten in modern C++ using OpenCV f
     └─────────┘                               └───────────┘
 ```
 
-## Dependencies
-
-- **OpenCV** >= 4.0
-- **OpenSSL** >= 1.1.0
-- **C++17** compatible compiler (GCC 8+, Clang 7+)
-- **pkg-config**
-
 ### Install dependencies (Ubuntu/Debian)
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y g++ libopencv-dev libssl-dev pkg-config
-```
-
-### Install dependencies (Fedora/RHEL)
-
-```bash
-sudo dnf install gcc-c++ opencv-devel openssl-devel pkgconfig
-```
-
-### Install dependencies (Yocto/Embedded Linux)
-
-Add to your image recipe:
-```
-IMAGE_INSTALL += "opencv libssl pkgconfig"
 ```
 
 ## Building
@@ -66,31 +46,8 @@ make client
 # Build server only  
 make server
 
-# Debug build (with AddressSanitizer)
-make debug
-
-# Release build (optimized + stripped)
-make release
-
-# Show build configuration
-make info
-
-# Show all targets
-make help
-```
-
-### Cross-compilation for Embedded Linux
-
 ```bash
-# ARM 32-bit (e.g., Raspberry Pi)
-make CROSS_COMPILE=arm-linux-gnueabihf-
-
-# ARM 64-bit (e.g., Raspberry Pi 4, Jetson)
-make CROSS_COMPILE=aarch64-linux-gnu-
 ```
-
-For cross-compilation, ensure the target sysroot has OpenCV and OpenSSL installed,
-and set `PKG_CONFIG_PATH` and `PKG_CONFIG_SYSROOT_DIR` appropriately.
 
 ## Usage
 
@@ -203,20 +160,3 @@ camera_streamer/
 └── server/
     └── server.cpp          # Server implementation
 ```
-
-## Changes from C Version
-
-1. **OpenCV instead of V4L2**: More portable, supports more camera types
-2. **JPEG encoding**: Built-in JPEG compression for efficient streaming
-3. **Modern C++17**: 
-   - `std::unique_ptr` instead of manual memory management
-   - `std::thread` instead of pthreads
-   - `std::atomic` for thread-safe flags
-   - `std::chrono` for time handling
-   - `std::mutex`/`std::condition_variable` for synchronization
-4. **RAII**: Automatic resource cleanup via destructors
-5. **CMake**: Cross-platform build system instead of Makefile
-
-## License
-
-See the original license file for terms.
