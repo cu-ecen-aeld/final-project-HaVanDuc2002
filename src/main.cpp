@@ -20,11 +20,12 @@
 
 #include <iostream>
 #include <string>
-#include <thread>
 #include <atomic>
 #include <csignal>
 #include <cstring>
 #include <getopt.h>
+#include <pthread.h>
+#include <unistd.h>
 
 #include "log.hpp"
 #include "ring_queue.hpp"
@@ -32,6 +33,33 @@
 #include "tls_client.hpp"
 
 using namespace streamer;
+
+// Global shutdown flag
+static std::atomic<bool> g_running{true};
+
+struct CaptureThreadContext {
+    CameraCapture* capture;
+    RingQueue* queue;
+};
+
+struct NetworkThreadContext {
+    TlsClient* tls;
+    RingQueue* queue;
+};
+
+static void* captureThreadMain(void* arg) {
+    pthread_setname_np(pthread_self(), "capture");
+    auto* ctx = static_cast<CaptureThreadContext*>(arg);
+    ctx->capture->captureLoop(*ctx->queue, g_running);
+    return nullptr;
+}
+
+static void* networkThreadMain(void* arg) {
+    pthread_setname_np(pthread_self(), "network");
+    auto* ctx = static_cast<NetworkThreadContext*>(arg);
+    ctx->tls->networkLoop(*ctx->queue, g_running);
+    return nullptr;
+}
 
 // Default configuration
 constexpr const char* DEFAULT_DEVICE = "0";
@@ -63,9 +91,6 @@ struct Config {
     // Debug
     bool verbose = false;
 };
-
-// Global shutdown flag
-static std::atomic<bool> g_running{true};
 
 // Signal handler
 static void signalHandler(int sig) {
@@ -262,22 +287,29 @@ int main(int argc, char* argv[]) {
         }
 
         // Create capture thread
-        std::thread capture_thread([&capture, &queue]() {
-            pthread_setname_np(pthread_self(), "capture");
-            capture->captureLoop(*queue, g_running);
-        });
+        pthread_t capture_thread{};
+        CaptureThreadContext capture_ctx{capture.get(), queue.get()};
+        if (pthread_create(&capture_thread, nullptr, captureThreadMain, &capture_ctx) != 0) {
+            LOG_ERROR << "Failed to create capture thread";
+            return EXIT_FAILURE;
+        }
 
         // Create network thread
-        std::thread network_thread([&tls, &queue]() {
-            pthread_setname_np(pthread_self(), "network");
-            tls->networkLoop(*queue, g_running);
-        });
+        pthread_t network_thread{};
+        NetworkThreadContext network_ctx{tls.get(), queue.get()};
+        if (pthread_create(&network_thread, nullptr, networkThreadMain, &network_ctx) != 0) {
+            LOG_ERROR << "Failed to create network thread";
+            g_running = false;
+            queue->shutdown();
+            pthread_join(capture_thread, nullptr);
+            return EXIT_FAILURE;
+        }
 
         LOG_INFO << "Streaming started (press Ctrl+C to stop)";
 
         // Main loop - just wait and periodically log stats
         while (g_running) {
-            std::this_thread::sleep_for(std::chrono::seconds(5));
+            sleep(5);
 
             if (g_running) {
                 auto stats = queue->getStats();
@@ -295,15 +327,11 @@ int main(int argc, char* argv[]) {
         queue->shutdown();
 
         // Wait for threads
-        if (capture_thread.joinable()) {
-            capture_thread.join();
-            LOG_DEBUG << "Capture thread joined";
-        }
+        pthread_join(capture_thread, nullptr);
+        LOG_DEBUG << "Capture thread joined";
 
-        if (network_thread.joinable()) {
-            network_thread.join();
-            LOG_DEBUG << "Network thread joined";
-        }
+        pthread_join(network_thread, nullptr);
+        LOG_DEBUG << "Network thread joined";
 
     } catch (const std::exception& e) {
         LOG_ERROR << "Exception: " << e.what();
