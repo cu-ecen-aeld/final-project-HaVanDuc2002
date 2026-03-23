@@ -1,6 +1,7 @@
 # Camera Frame Streamer (C++ / OpenCV)
 
-A camera frame streaming system over TLS, written in modern C++ using OpenCV for camera capture.
+A camera frame streaming system over TLS, written in modern C++ using OpenCV for camera capture. This project is built with Yocto, as a personal project from course "Advanced Embedded Linux Development"
+Link to Yocto reposistory: https://github.com/cu-ecen-aeld/assignment-6-HaVanDuc2002
 
 ## Features
 
