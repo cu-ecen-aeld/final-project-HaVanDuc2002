@@ -12,11 +12,10 @@
 
 namespace streamer {
 
-RingQueue::RingQueue(size_t capacity, size_t max_frame_size, BackpressurePolicy policy)
+RingQueue::RingQueue(size_t capacity, size_t max_frame_size)
     : slots_(capacity)
     , capacity_(capacity)
-    , max_frame_size_(max_frame_size)
-    , policy_(policy) {
+    , max_frame_size_(max_frame_size) {
 
     if (capacity == 0 || max_frame_size == 0) {
         LOG_ERROR << "Invalid queue parameters: capacity=" << capacity
@@ -26,11 +25,9 @@ RingQueue::RingQueue(size_t capacity, size_t max_frame_size, BackpressurePolicy 
 
     pthread_mutex_init(&mutex_, nullptr);
     pthread_cond_init(&not_empty_, nullptr);
-    pthread_cond_init(&not_full_, nullptr);
 
     LOG_INFO << "Ring queue created: capacity=" << capacity
-             << ", max_frame_size=" << max_frame_size
-             << ", policy=" << static_cast<int>(policy);
+             << ", max_frame_size=" << max_frame_size;
 }
 
 RingQueue::~RingQueue() {
@@ -42,7 +39,6 @@ RingQueue::~RingQueue() {
     pthread_mutex_unlock(&mutex_);
 
     pthread_cond_destroy(&not_empty_);
-    pthread_cond_destroy(&not_full_);
     pthread_mutex_destroy(&mutex_);
     LOG_DEBUG << "Ring queue destroyed";
 }
@@ -66,38 +62,16 @@ bool RingQueue::push(uint64_t seq, uint64_t timestamp_ns,
         return false;
     }
 
-    // Handle full queue based on policy
+    // When full, drop the oldest frame to make room
     while (count_ >= capacity_) {
-        switch (policy_) {
-            case BackpressurePolicy::DropOldest:
-                // Drop the oldest frame (at tail)
-                if (slots_[tail_]) {
-                    // Clear data for security
-                    std::memset(slots_[tail_]->data.data(), 0, slots_[tail_]->data.size());
-                    slots_[tail_].reset();
-                }
-                tail_ = (tail_ + 1) % capacity_;
-                count_--;
-                frames_dropped_++;
-                LOG_DEBUG << "Dropped oldest frame due to backpressure";
-                break;
-
-            case BackpressurePolicy::DropNewest:
-                // Drop this new frame
-                frames_dropped_++;
-                LOG_DEBUG << "Dropped newest frame due to backpressure";
-                pthread_mutex_unlock(&mutex_);
-                return false;
-
-            case BackpressurePolicy::Block:
-                // Wait until space is available
-                pthread_cond_wait(&not_full_, &mutex_);
-                if (shutdown_.load()) {
-                    pthread_mutex_unlock(&mutex_);
-                    return false;
-                }
-                break;
+        if (slots_[tail_]) {
+            std::memset(slots_[tail_]->data.data(), 0, slots_[tail_]->data.size());
+            slots_[tail_].reset();
         }
+        tail_ = (tail_ + 1) % capacity_;
+        count_--;
+        frames_dropped_++;
+        LOG_DEBUG << "Dropped oldest frame due to backpressure";
     }
 
     // Create new frame packet
@@ -163,7 +137,6 @@ FramePacketPtr RingQueue::pop(std::chrono::milliseconds timeout) {
     count_--;
     frames_popped_++;
 
-    pthread_cond_signal(&not_full_);
     pthread_mutex_unlock(&mutex_);
     return pkt;
 }
@@ -174,7 +147,6 @@ void RingQueue::shutdown() {
     pthread_mutex_unlock(&mutex_);
 
     pthread_cond_broadcast(&not_empty_);
-    pthread_cond_broadcast(&not_full_);
     LOG_INFO << "Ring queue shutdown signaled";
 }
 

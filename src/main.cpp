@@ -248,7 +248,7 @@ int main(int argc, char* argv[]) {
     try {
         // Create frame queue
         auto queue = std::make_unique<RingQueue>(
-            config.queue_size, MAX_FRAME_SIZE, BackpressurePolicy::DropOldest);
+            config.queue_size, MAX_FRAME_SIZE);
 
         // Initialize camera capture
         CameraConfig cam_config;

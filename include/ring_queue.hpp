@@ -22,13 +22,6 @@ namespace streamer {
 // Maximum frame payload size (adjust based on expected resolution)
 constexpr size_t MAX_FRAME_SIZE = 4 * 1024 * 1024;  // 4MB for up to 4K frames
 
-// Backpressure policy
-enum class BackpressurePolicy {
-    DropOldest,  // Drop oldest frame when full (default)
-    DropNewest,  // Drop new frame when full
-    Block        // Block producer until space available
-};
-
 // Frame packet structure
 struct FramePacket {
     uint64_t seq;           // Sequence number
@@ -57,10 +50,8 @@ public:
      * Create a new ring queue
      * @param capacity Number of frame slots
      * @param max_frame_size Maximum size of a single frame
-     * @param policy Backpressure policy
      */
-    RingQueue(size_t capacity, size_t max_frame_size,
-              BackpressurePolicy policy = BackpressurePolicy::DropOldest);
+    RingQueue(size_t capacity, size_t max_frame_size);
 
     ~RingQueue();
 
@@ -120,9 +111,7 @@ private:
 
     mutable pthread_mutex_t mutex_;
     pthread_cond_t not_empty_;
-    pthread_cond_t not_full_;
 
-    BackpressurePolicy policy_;
     std::atomic<bool> shutdown_{false};
 
     // Statistics
