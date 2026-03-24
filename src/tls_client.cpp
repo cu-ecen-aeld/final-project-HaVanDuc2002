@@ -9,8 +9,7 @@
 #include "log.hpp"
 
 #include <cstring>
-#include <thread>
-#include <chrono>
+#include <unistd.h>
 
 #include <unistd.h>
 #include <sys/socket.h>
@@ -292,7 +291,10 @@ bool TlsClient::sslWriteAll(const void* data, size_t len) {
 }
 
 void TlsClient::sleepMs(uint32_t ms) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+    struct timespec ts;
+    ts.tv_sec  = ms / 1000;
+    ts.tv_nsec = (ms % 1000) * 1000000L;
+    nanosleep(&ts, nullptr);
 }
 
 void TlsClient::networkLoop(RingQueue& queue, const std::atomic<bool>& running) {
@@ -321,7 +323,7 @@ void TlsClient::networkLoop(RingQueue& queue, const std::atomic<bool>& running) 
         }
 
         // Get frame from queue
-        auto pkt = queue.pop(std::chrono::milliseconds(QUEUE_TIMEOUT_MS));
+        FramePacketPtr pkt = queue.pop(QUEUE_TIMEOUT_MS);
         if (!pkt) {
             // Timeout or shutdown
             continue;
@@ -332,7 +334,7 @@ void TlsClient::networkLoop(RingQueue& queue, const std::atomic<bool>& running) 
         initFrameHeader(hdr,
                         pkt->seq,
                         pkt->timestamp_ns,
-                        static_cast<uint32_t>(pkt->data.size()),
+                        pkt->len,
                         pkt->pixel_format,
                         pkt->width,
                         pkt->height);
@@ -340,21 +342,25 @@ void TlsClient::networkLoop(RingQueue& queue, const std::atomic<bool>& running) 
         // Send header
         if (!sslWriteAll(&hdr, sizeof(hdr))) {
             LOG_ERROR << "Failed to send frame header";
+            frame_packet_free(pkt);
             tlsDisconnect();
             continue;
         }
 
-        // Send payload
-        if (!sslWriteAll(pkt->data.data(), pkt->data.size())) {
+        // Send payload — zero copy: pkt->data points into mmap slot
+        if (!sslWriteAll(pkt->data, pkt->len)) {
             LOG_ERROR << "Failed to send frame payload";
+            frame_packet_free(pkt);
             tlsDisconnect();
             continue;
         }
 
         frames_sent_++;
-        bytes_sent_ += sizeof(hdr) + pkt->data.size();
+        bytes_sent_ += sizeof(hdr) + pkt->len;
 
-        LOG_DEBUG << "Sent frame seq=" << pkt->seq << " len=" << pkt->data.size();
+        LOG_DEBUG << "Sent frame seq=" << pkt->seq << " len=" << pkt->len;
+        frame_packet_free(pkt);
+        pkt = nullptr;
     }
 
     // Disconnect on shutdown
