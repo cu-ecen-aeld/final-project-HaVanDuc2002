@@ -1,6 +1,6 @@
 /**
  * @file log.hpp
- * @brief Structured logging with levels for C++
+ * @brief Structured logging with levels — writes to /var/tmp/camera_log via POSIX I/O
  *
  * Log levels: ERROR, WARN, INFO, DEBUG
  * Output format: [LEVEL] [timestamp] [file:line] message
@@ -9,67 +9,87 @@
 #ifndef LOG_HPP
 #define LOG_HPP
 
-#include <iostream>
 #include <sstream>
-#include <iomanip>
-#include <chrono>
 #include <cstring>
-#include <mutex>
+#include <cstdio>
+#include <unistd.h>
+#include <fcntl.h>
+#include <time.h>
+#include <pthread.h>
 
 namespace streamer {
 
+static constexpr const char* LOG_FILE_PATH = "/var/tmp/camera_log";
+
 enum class LogLevel {
     Error = 0,
-    Warn = 1,
-    Info = 2,
+    Warn  = 1,
+    Info  = 2,
     Debug = 3
 };
 
-// Global log level - can be set at runtime
+// Global log level — can be set at runtime
 inline LogLevel g_log_level = LogLevel::Info;
-inline std::mutex g_log_mutex;
 
-// Extract filename from path
+// POSIX mutex for thread-safe log writes
+inline pthread_mutex_t g_log_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+// Log file descriptor — opened once via pthread_once
+inline int         g_log_fd   = -1;
+inline pthread_once_t g_log_once = PTHREAD_ONCE_INIT;
+
+inline void openLogFile() {
+    g_log_fd = open(LOG_FILE_PATH, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (g_log_fd < 0) {
+        // Fall back to stderr if the log file cannot be opened
+        g_log_fd = STDERR_FILENO;
+    }
+}
+
+inline void ensureLogOpen() {
+    pthread_once(&g_log_once, openLogFile);
+}
+
+// Extract filename from full __FILE__ path
 inline const char* extractFilename(const char* path) {
     const char* file = std::strrchr(path, '/');
     return file ? file + 1 : path;
 }
 
-// Get current timestamp string
+// Build timestamp string using POSIX clock_gettime + localtime_r
 inline std::string getTimestamp() {
-    auto now = std::chrono::system_clock::now();
-    auto time_t_now = std::chrono::system_clock::to_time_t(now);
-    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-        now.time_since_epoch()) % 1000;
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
 
-    std::tm tm_info;
-    localtime_r(&time_t_now, &tm_info);
+    struct tm tm_info;
+    localtime_r(&ts.tv_sec, &tm_info);
 
-    std::ostringstream oss;
-    oss << std::put_time(&tm_info, "%Y-%m-%d %H:%M:%S")
-        << '.' << std::setfill('0') << std::setw(3) << ms.count();
-    return oss.str();
+    char date_buf[24];
+    strftime(date_buf, sizeof(date_buf), "%Y-%m-%d %H:%M:%S", &tm_info);
+
+    char result[32];
+    snprintf(result, sizeof(result), "%s.%03ld", date_buf, ts.tv_nsec / 1000000L);
+    return std::string(result);
 }
 
-// Log level to string
 inline const char* levelToString(LogLevel level) {
     switch (level) {
         case LogLevel::Error: return "ERROR";
         case LogLevel::Warn:  return "WARN ";
         case LogLevel::Info:  return "INFO ";
         case LogLevel::Debug: return "DEBUG";
-        default: return "?????";
+        default:              return "?????";
     }
 }
 
-// Log message class for stream-style logging
+// Stream-style log message — writes to /var/tmp/camera_log on destruction
 class LogMessage {
 public:
     LogMessage(LogLevel level, const char* file, int line)
         : level_(level), should_log_(level <= g_log_level) {
         if (should_log_) {
             stream_ << "[" << levelToString(level) << "] "
-                    << "[" << getTimestamp() << "] "
+                    << "[" << getTimestamp()        << "] "
                     << "[" << extractFilename(file) << ":" << line << "] ";
         }
     }
@@ -77,8 +97,11 @@ public:
     ~LogMessage() {
         if (should_log_) {
             stream_ << '\n';
-            std::lock_guard<std::mutex> lock(g_log_mutex);
-            std::cerr << stream_.str();
+            std::string msg = stream_.str();
+            ensureLogOpen();
+            pthread_mutex_lock(&g_log_mutex);
+            write(g_log_fd, msg.c_str(), msg.size());
+            pthread_mutex_unlock(&g_log_mutex);
         }
     }
 
@@ -91,12 +114,12 @@ public:
     }
 
 private:
-    LogLevel level_;
-    bool should_log_;
+    LogLevel           level_;
+    bool               should_log_;
     std::ostringstream stream_;
 };
 
-// Errno log message
+// Errno variant — appends strerror(errno) to the message
 class LogErrnoMessage : public LogMessage {
 public:
     LogErrnoMessage(LogLevel level, const char* file, int line, int err_num)
@@ -116,8 +139,8 @@ private:
 
 // Logging macros
 #define LOG_ERROR streamer::LogMessage(streamer::LogLevel::Error, __FILE__, __LINE__)
-#define LOG_WARN  streamer::LogMessage(streamer::LogLevel::Warn, __FILE__, __LINE__)
-#define LOG_INFO  streamer::LogMessage(streamer::LogLevel::Info, __FILE__, __LINE__)
+#define LOG_WARN  streamer::LogMessage(streamer::LogLevel::Warn,  __FILE__, __LINE__)
+#define LOG_INFO  streamer::LogMessage(streamer::LogLevel::Info,  __FILE__, __LINE__)
 #define LOG_DEBUG streamer::LogMessage(streamer::LogLevel::Debug, __FILE__, __LINE__)
 
 // Log with errno
