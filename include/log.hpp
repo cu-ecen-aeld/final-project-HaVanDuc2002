@@ -100,7 +100,8 @@ public:
             std::string msg = stream_.str();
             ensureLogOpen();
             pthread_mutex_lock(&g_log_mutex);
-            write(g_log_fd, msg.c_str(), msg.size());
+            write(g_log_fd, msg.c_str(), msg.size());   // file
+            write(STDERR_FILENO, msg.c_str(), msg.size()); // terminal
             pthread_mutex_unlock(&g_log_mutex);
         }
     }
