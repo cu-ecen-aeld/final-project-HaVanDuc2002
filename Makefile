@@ -58,7 +58,7 @@ $(CLIENT_TARGET): $(CLIENT_OBJS)
 	$(CXX) $(LDFLAGS) $(PROJ_LDFLAGS) -o $@ $^ $(LIBS)
 
 $(OUT_DIR)/%.o: $(SRC_DIR)/%.cpp
-	$(CXX) $(CXXFLAGS) $(PROJ_CXXFLAGS) -c -o $@ $<
+	$(CXX) $(CXXFLAGS) $(PROJ_CXXFLAGS) -MMD -MP -c -o $@ $<
 
 # Server build
 server: $(OUT_DIR) $(SERVER_TARGET)
@@ -68,7 +68,7 @@ $(SERVER_TARGET): $(SERVER_OBJS)
 	$(CXX) $(LDFLAGS) $(PROJ_LDFLAGS) -o $@ $^ $(OPENSSL_LIBS) -lpthread
 
 $(OUT_DIR)/server.o: $(SVR_DIR)/server.cpp
-	$(CXX) $(CXXFLAGS) $(PROJ_CXXFLAGS) -c -o $@ $<
+	$(CXX) $(CXXFLAGS) $(PROJ_CXXFLAGS) -MMD -MP -c -o $@ $<
 
 # Generate self-signed certificates for testing
 certs:
@@ -80,6 +80,9 @@ certs:
 		-days 365 -nodes \
 		-subj '/CN=localhost'
 	@echo "Certificates created in $(CERT_DIR)/"
+
+# Auto-generated header dependency files
+-include $(wildcard $(OUT_DIR)/*.d)
 
 clean:
 	rm -rf $(OUT_DIR)
