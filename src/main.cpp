@@ -18,10 +18,10 @@
  *                     --fps 30 --host example.com --port 4433
  */
 
-#include <iostream>
 #include <string>
 #include <atomic>
 #include <cstring>
+#include <stdlib.h>
 #include <getopt.h>
 #include <pthread.h>
 #include <unistd.h>
@@ -248,11 +248,15 @@ int main(int argc, char* argv[]) {
 
     int ret = EXIT_FAILURE;
 
-    try {
-        // Create frame queue
-        auto queue = std::make_unique<RingQueue>(
-            config.queue_size, MAX_FRAME_SIZE);
+    // Create frame queue
+    RingQueue* queue = new RingQueue(config.queue_size, MAX_FRAME_SIZE);
+    if (!queue->isValid()) {
+        LOG_ERROR << "Failed to initialize ring queue";
+        delete queue;
+        return EXIT_FAILURE;
+    }
 
+    {
         // Initialize camera capture
         CameraConfig cam_config;
         cam_config.device = config.device;
@@ -262,7 +266,7 @@ int main(int argc, char* argv[]) {
         cam_config.use_jpeg = config.use_jpeg;
         cam_config.jpeg_quality = config.jpeg_quality;
 
-        auto capture = std::make_unique<CameraCapture>(cam_config);
+        CameraCapture* capture = new CameraCapture(cam_config);
         if (!capture->open()) {
             LOG_ERROR << "Failed to initialize camera";
             return EXIT_FAILURE;
@@ -277,7 +281,7 @@ int main(int argc, char* argv[]) {
         tls_config.frame_height = capture->actualHeight();
         tls_config.pixel_format = capture->pixelFormat();
 
-        auto tls = std::make_unique<TlsClient>(tls_config);
+        TlsClient* tls = new TlsClient(tls_config);
         if (!tls->initialize()) {
             LOG_ERROR << "Failed to initialize TLS client";
             return EXIT_FAILURE;
@@ -291,7 +295,7 @@ int main(int argc, char* argv[]) {
 
         // Create capture thread
         pthread_t capture_thread{};
-        CaptureThreadContext capture_ctx{capture.get(), queue.get()};
+        CaptureThreadContext capture_ctx{capture, queue};
         if (pthread_create(&capture_thread, nullptr, captureThreadMain, &capture_ctx) != 0) {
             LOG_ERROR << "Failed to create capture thread";
             return EXIT_FAILURE;
@@ -299,7 +303,7 @@ int main(int argc, char* argv[]) {
 
         // Create network thread
         pthread_t network_thread{};
-        NetworkThreadContext network_ctx{tls.get(), queue.get()};
+        NetworkThreadContext network_ctx{tls, queue};
         if (pthread_create(&network_thread, nullptr, networkThreadMain, &network_ctx) != 0) {
             LOG_ERROR << "Failed to create network thread";
             g_running = false;
@@ -336,11 +340,11 @@ int main(int argc, char* argv[]) {
         pthread_join(network_thread, nullptr);
         LOG_DEBUG << "Network thread joined";
 
-    } catch (const std::exception& e) {
-        LOG_ERROR << "Exception: " << e.what();
-        ret = EXIT_FAILURE;
+        delete tls;
+        delete capture;
     }
 
+    delete queue;
     LOG_INFO << "Camera Streamer stopped";
     return ret;
 }
