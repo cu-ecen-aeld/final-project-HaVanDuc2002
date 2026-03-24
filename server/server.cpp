@@ -15,6 +15,7 @@
 #include <vector>
 #include <cstring>
 #include <csignal>
+#include <signal.h>
 #include <atomic>
 #include <chrono>
 #include <ctime>
@@ -23,6 +24,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/socket.h>
+#include <sys/select.h>
 #include <sys/stat.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -83,7 +85,7 @@ struct Stats {
 static std::atomic<bool> g_running{true};
 static Stats g_stats;
 
-// Signal handler
+// Signal handler (async-signal-safe: only writes to atomic bool)
 static void signalHandler(int sig) {
     (void)sig;
     g_running = false;
@@ -390,10 +392,13 @@ int main(int argc, char* argv[]) {
         std::cout << "[INFO] Saving frames to: " << cfg.output_dir << "\n";
     }
 
-    // Setup signal handlers
-    std::signal(SIGINT, signalHandler);
-    std::signal(SIGTERM, signalHandler);
-    std::signal(SIGPIPE, SIG_IGN);
+    // Setup signal handlers using POSIX sigaction
+    struct sigaction sa{};
+    sa.sa_handler = signalHandler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART;  // restart interrupted syscalls where possible
+    sigaction(SIGINT,  &sa, nullptr);
+    sigaction(SIGTERM, &sa, nullptr);
 
     // Initialize OpenSSL
     OPENSSL_init_ssl(OPENSSL_INIT_LOAD_SSL_STRINGS |
@@ -443,8 +448,21 @@ int main(int argc, char* argv[]) {
 
     g_stats.start_time = std::chrono::steady_clock::now();
 
-    // Accept loop
+    // Accept loop — use select() with 1-second timeout so Ctrl+C is handled promptly
     while (g_running) {
+        fd_set read_fds;
+        FD_ZERO(&read_fds);
+        FD_SET(server_fd, &read_fds);
+        struct timeval tv{1, 0};  // 1-second timeout
+
+        int ready = select(server_fd + 1, &read_fds, nullptr, nullptr, &tv);
+        if (ready < 0) {
+            if (errno == EINTR) continue;  // signal interrupted select, recheck g_running
+            perror("select");
+            break;
+        }
+        if (ready == 0) continue;  // timeout, loop back to check g_running
+
         struct sockaddr_in client_addr{};
         socklen_t client_len = sizeof(client_addr);
 
