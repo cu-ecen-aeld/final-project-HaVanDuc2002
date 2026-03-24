@@ -1,11 +1,11 @@
 # Camera Frame Streamer - Makefile
 # C++ with OpenCV and OpenSSL for embedded Linux
 
-CXX = g++
-CXXFLAGS = -std=c++17 -Wall -Wextra -Wpedantic -O2 -g
-CXXFLAGS += -D_GNU_SOURCE
-CXXFLAGS += -fstack-protector-strong -fPIE
-CXXFLAGS += -I./include
+# Allow cross-compilation by overriding CXX, CXXFLAGS, LDFLAGS, OUT_DIR
+CXX ?= g++
+CXXFLAGS ?=
+LDFLAGS ?=
+OUT_DIR ?= build
 
 # OpenCV flags (use pkg-config)
 OPENCV_CFLAGS := $(shell pkg-config --cflags opencv4 2>/dev/null || pkg-config --cflags opencv 2>/dev/null)
@@ -15,16 +15,19 @@ OPENCV_LIBS := $(shell pkg-config --libs opencv4 2>/dev/null || pkg-config --lib
 OPENSSL_CFLAGS := $(shell pkg-config --cflags openssl 2>/dev/null)
 OPENSSL_LIBS := $(shell pkg-config --libs openssl 2>/dev/null || echo "-lssl -lcrypto")
 
-CXXFLAGS += $(OPENCV_CFLAGS) $(OPENSSL_CFLAGS)
+# Project-specific flags (always applied, even when CXXFLAGS is overridden)
+PROJ_CXXFLAGS = -std=c++17 -Wall -Wextra -Wpedantic -O2 -g
+PROJ_CXXFLAGS += -D_GNU_SOURCE -fstack-protector-strong -fPIE
+PROJ_CXXFLAGS += -I./include
+PROJ_CXXFLAGS += $(OPENCV_CFLAGS) $(OPENSSL_CFLAGS)
 
-LDFLAGS = -pie -Wl,-z,relro,-z,now
+PROJ_LDFLAGS = -pie -Wl,-z,relro,-z,now
 LIBS = $(OPENCV_LIBS) $(OPENSSL_LIBS) -lpthread
 
 # Directories
 SRC_DIR = src
 INC_DIR = include
 SVR_DIR = server
-OUT_DIR = build
 CERT_DIR = certs
 
 # Client source files
@@ -52,20 +55,20 @@ client: $(OUT_DIR) $(CLIENT_TARGET)
 	@echo "Client built: $(CLIENT_TARGET)"
 
 $(CLIENT_TARGET): $(CLIENT_OBJS)
-	$(CXX) $(LDFLAGS) -o $@ $^ $(LIBS)
+	$(CXX) $(LDFLAGS) $(PROJ_LDFLAGS) -o $@ $^ $(LIBS)
 
 $(OUT_DIR)/%.o: $(SRC_DIR)/%.cpp
-	$(CXX) $(CXXFLAGS) -c -o $@ $<
+	$(CXX) $(CXXFLAGS) $(PROJ_CXXFLAGS) -c -o $@ $<
 
 # Server build
 server: $(OUT_DIR) $(SERVER_TARGET)
 	@echo "Server built: $(SERVER_TARGET)"
 
 $(SERVER_TARGET): $(SERVER_OBJS)
-	$(CXX) $(LDFLAGS) -o $@ $^ $(OPENSSL_LIBS) -lpthread
+	$(CXX) $(LDFLAGS) $(PROJ_LDFLAGS) -o $@ $^ $(OPENSSL_LIBS) -lpthread
 
 $(OUT_DIR)/server.o: $(SVR_DIR)/server.cpp
-	$(CXX) $(CXXFLAGS) -c -o $@ $<
+	$(CXX) $(CXXFLAGS) $(PROJ_CXXFLAGS) -c -o $@ $<
 
 # Generate self-signed certificates for testing
 certs:
