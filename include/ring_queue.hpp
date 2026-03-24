@@ -13,11 +13,9 @@
 #include <cstdint>
 #include <vector>
 #include <memory>
-#include <mutex>
-#include <condition_variable>
-#include <optional>
 #include <chrono>
 #include <atomic>
+#include <pthread.h>
 
 namespace streamer {
 
@@ -120,9 +118,9 @@ private:
     size_t tail_ = 0;
     size_t count_ = 0;
 
-    mutable std::mutex mutex_;
-    std::condition_variable not_empty_;
-    std::condition_variable not_full_;
+    mutable pthread_mutex_t mutex_;
+    pthread_cond_t not_empty_;
+    pthread_cond_t not_full_;
 
     BackpressurePolicy policy_;
     std::atomic<bool> shutdown_{false};

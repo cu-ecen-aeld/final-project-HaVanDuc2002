@@ -7,6 +7,8 @@
 #include "log.hpp"
 
 #include <cstring>
+#include <cerrno>
+#include <time.h>
 
 namespace streamer {
 
@@ -22,6 +24,10 @@ RingQueue::RingQueue(size_t capacity, size_t max_frame_size, BackpressurePolicy 
         throw std::invalid_argument("Invalid queue parameters");
     }
 
+    pthread_mutex_init(&mutex_, nullptr);
+    pthread_cond_init(&not_empty_, nullptr);
+    pthread_cond_init(&not_full_, nullptr);
+
     LOG_INFO << "Ring queue created: capacity=" << capacity
              << ", max_frame_size=" << max_frame_size
              << ", policy=" << static_cast<int>(policy);
@@ -29,10 +35,15 @@ RingQueue::RingQueue(size_t capacity, size_t max_frame_size, BackpressurePolicy 
 
 RingQueue::~RingQueue() {
     // Clear all slots (unique_ptrs will auto-delete)
-    std::lock_guard<std::mutex> lock(mutex_);
+    pthread_mutex_lock(&mutex_);
     for (auto& slot : slots_) {
         slot.reset();
     }
+    pthread_mutex_unlock(&mutex_);
+
+    pthread_cond_destroy(&not_empty_);
+    pthread_cond_destroy(&not_full_);
+    pthread_mutex_destroy(&mutex_);
     LOG_DEBUG << "Ring queue destroyed";
 }
 
@@ -48,9 +59,10 @@ bool RingQueue::push(uint64_t seq, uint64_t timestamp_ns,
         return false;
     }
 
-    std::unique_lock<std::mutex> lock(mutex_);
+    pthread_mutex_lock(&mutex_);
 
     if (shutdown_.load()) {
+        pthread_mutex_unlock(&mutex_);
         return false;
     }
 
@@ -74,12 +86,14 @@ bool RingQueue::push(uint64_t seq, uint64_t timestamp_ns,
                 // Drop this new frame
                 frames_dropped_++;
                 LOG_DEBUG << "Dropped newest frame due to backpressure";
+                pthread_mutex_unlock(&mutex_);
                 return false;
 
             case BackpressurePolicy::Block:
                 // Wait until space is available
-                not_full_.wait(lock);
+                pthread_cond_wait(&not_full_, &mutex_);
                 if (shutdown_.load()) {
+                    pthread_mutex_unlock(&mutex_);
                     return false;
                 }
                 break;
@@ -96,33 +110,49 @@ bool RingQueue::push(uint64_t seq, uint64_t timestamp_ns,
     count_++;
     frames_pushed_++;
 
-    not_empty_.notify_one();
+    pthread_cond_signal(&not_empty_);
+    pthread_mutex_unlock(&mutex_);
     return true;
 }
 
 FramePacketPtr RingQueue::pop(std::chrono::milliseconds timeout) {
-    std::unique_lock<std::mutex> lock(mutex_);
-
-    // Wait for data or shutdown
-    auto wait_pred = [this] { return count_ > 0 || shutdown_.load(); };
+    pthread_mutex_lock(&mutex_);
 
     if (timeout.count() < 0) {
-        // Infinite wait
-        not_empty_.wait(lock, wait_pred);
+        // Infinite wait — loop to handle spurious wakeups
+        while (count_ == 0 && !shutdown_.load()) {
+            pthread_cond_wait(&not_empty_, &mutex_);
+        }
     } else if (timeout.count() == 0) {
         // No wait
-        if (!wait_pred()) {
+        if (count_ == 0 || shutdown_.load()) {
+            pthread_mutex_unlock(&mutex_);
             return nullptr;
         }
     } else {
-        // Timed wait
-        if (!not_empty_.wait_for(lock, timeout, wait_pred)) {
-            return nullptr;  // Timeout
+        // Timed wait — build absolute deadline from CLOCK_REALTIME
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        long ms = timeout.count();
+        ts.tv_sec  += ms / 1000;
+        ts.tv_nsec += (ms % 1000) * 1000000L;
+        if (ts.tv_nsec >= 1000000000L) {
+            ts.tv_sec++;
+            ts.tv_nsec -= 1000000000L;
+        }
+        // Loop to handle spurious wakeups
+        while (count_ == 0 && !shutdown_.load()) {
+            int ret = pthread_cond_timedwait(&not_empty_, &mutex_, &ts);
+            if (ret == ETIMEDOUT) {
+                pthread_mutex_unlock(&mutex_);
+                return nullptr;
+            }
         }
     }
 
     if (count_ == 0) {
         // Shutdown with empty queue
+        pthread_mutex_unlock(&mutex_);
         return nullptr;
     }
 
@@ -133,17 +163,18 @@ FramePacketPtr RingQueue::pop(std::chrono::milliseconds timeout) {
     count_--;
     frames_popped_++;
 
-    not_full_.notify_one();
+    pthread_cond_signal(&not_full_);
+    pthread_mutex_unlock(&mutex_);
     return pkt;
 }
 
 void RingQueue::shutdown() {
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        shutdown_.store(true);
-    }
-    not_empty_.notify_all();
-    not_full_.notify_all();
+    pthread_mutex_lock(&mutex_);
+    shutdown_.store(true);
+    pthread_mutex_unlock(&mutex_);
+
+    pthread_cond_broadcast(&not_empty_);
+    pthread_cond_broadcast(&not_full_);
     LOG_INFO << "Ring queue shutdown signaled";
 }
 
