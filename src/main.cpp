@@ -21,11 +21,11 @@
 #include <iostream>
 #include <string>
 #include <atomic>
-#include <csignal>
 #include <cstring>
 #include <getopt.h>
 #include <pthread.h>
 #include <unistd.h>
+#include <signal.h>
 
 #include "log.hpp"
 #include "ring_queue.hpp"
@@ -67,7 +67,7 @@ constexpr uint16_t DEFAULT_WIDTH = 1280;
 constexpr uint16_t DEFAULT_HEIGHT = 720;
 constexpr uint32_t DEFAULT_FPS = 30;
 constexpr uint16_t DEFAULT_PORT = 4433;
-constexpr size_t DEFAULT_QUEUE_SIZE = 8;
+constexpr size_t DEFAULT_QUEUE_SIZE = 128;
 constexpr int DEFAULT_JPEG_QUALITY = 85;
 
 // Program configuration
@@ -92,9 +92,9 @@ struct Config {
     bool verbose = false;
 };
 
-// Signal handler
+// Signal handler — async-signal-safe: only writes to atomic flag
 static void signalHandler(int sig) {
-    LOG_INFO << "Received signal " << sig << ", shutting down...";
+    (void)sig;
     g_running = false;
 }
 
@@ -238,10 +238,13 @@ int main(int argc, char* argv[]) {
              << config.height << " @ " << config.fps << " fps";
     LOG_INFO << "Server: " << config.host << ":" << config.port;
 
-    // Setup signal handlers
-    std::signal(SIGINT, signalHandler);
-    std::signal(SIGTERM, signalHandler);
-    std::signal(SIGPIPE, SIG_IGN);  // Ignore broken pipe
+    // Setup signal handlers via POSIX sigaction
+    struct sigaction sa{};
+    sa.sa_handler = signalHandler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;  // no SA_RESTART — allows blocking syscalls to return EINTR
+    sigaction(SIGINT,  &sa, nullptr);
+    sigaction(SIGTERM, &sa, nullptr);
 
     int ret = EXIT_FAILURE;
 
