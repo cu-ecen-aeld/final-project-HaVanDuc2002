@@ -9,10 +9,11 @@ Yocto repository: https://github.com/cu-ecen-aeld/assignment-6-HaVanDuc2002
 - **OpenCV-based capture**: Works with any V4L2-compatible camera (USB, CSI, etc.)
 - **JPEG compression**: Efficient frame encoding for network transmission (raw BGR also supported)
 - **TLS 1.2+ encryption**: Secure streaming with certificate verification, SNI, and hostname checking
-- **Thread-safe ring queue**: Bounded POSIX-mutex-protected queue with DropOldest backpressure — capture thread never blocks
+- **mmap-backed ring queue**: Pre-allocated shared mapping with one-copy push and zero-copy pop semantics
 - **Automatic reconnection**: Exponential backoff (1 s → 30 s) on connection failure
 - **POSIX threads**: Two pthreads — one for capture, one for network I/O
 - **Dual logging**: Writes to `/var/tmp/camera_log` and stderr simultaneously
+- **Embedded-oriented runtime**: POSIX `sigaction`, `clock_gettime`, `nanosleep`, `pthread`, and C stdio in runtime paths
 
 ## Architecture
 
@@ -20,12 +21,12 @@ Yocto repository: https://github.com/cu-ecen-aeld/assignment-6-HaVanDuc2002
  RPi (Client)                                    PC (Server)
 ┌──────────────────────────────────────┐    ┌─────────────────────┐
 │  Capture Thread ──> RingQueue ──> Network Thread ──TLS──> frame_server │
-│  (OpenCV / V4L2)   (POSIX mutex)  (OpenSSL)      │    │  (saves frames) │
+│  (OpenCV / V4L2)   (mmap slots)   (OpenSSL)      │    │  (saves frames) │
 └──────────────────────────────────────┘    └─────────────────────┘
 ```
 
 - **Capture thread**: reads frames from the camera via `cv::VideoCapture`, JPEG-encodes them, and pushes into the ring queue
-- **Ring queue**: bounded circular buffer (default 8 slots, max 4 MB/frame); when full, the oldest frame is silently dropped to keep capture running
+- **Ring queue**: mmap-backed circular buffer (default 128 slots, max 4 MB/frame); when full, the oldest frame is dropped to keep capture running
 - **Network thread**: pops frames from the queue, connects to the server over TLS with automatic reconnect, and streams frames using the binary wire protocol
 
 ## Dependencies
@@ -123,8 +124,16 @@ When deployed via Yocto, configure `/etc/camera-streamer.conf` and manage via th
 | `--host HOSTNAME` | Server hostname (required) | — |
 | `--port N` | Server port | `4433` |
 | `--ca PATH` | CA certificate bundle path | system default |
-| `--queue-size N` | Ring queue capacity (frames) | `8` |
+| `--queue-size N` | Ring queue capacity (frames) | `128` |
 | `--verbose, -v` | Enable debug logging | disabled |
+
+## Embedded Linux Suitability Notes
+
+- Runtime code paths avoid exceptions and iostream usage.
+- Signal handling uses POSIX `sigaction` with an async-signal-safe handler.
+- Timing/sleep primitives use `clock_gettime` and `nanosleep`.
+- Frame queue uses pre-allocated `mmap` storage and avoids per-frame heap allocations for queue payload.
+- Small STL usage remains in utility code (`log.hpp`) and OpenCV-required vectors for JPEG encoding parameters/payload buffers.
 
 ### Server (`frame_server`)
 
