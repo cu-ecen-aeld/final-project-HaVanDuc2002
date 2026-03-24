@@ -8,8 +8,8 @@
 #include "protocol.hpp"
 #include "log.hpp"
 
-#include <chrono>
-#include <thread>
+#include <stdlib.h>
+#include <time.h>
 
 namespace streamer {
 
@@ -28,12 +28,12 @@ CameraCapture::~CameraCapture() {
 }
 
 bool CameraCapture::open() {
-    // Try to parse device as integer index first
+    // Try to parse device string as integer index
     int device_index = -1;
-    try {
-        device_index = std::stoi(config_.device);
-    } catch (...) {
-        device_index = -1;
+    char* endptr = nullptr;
+    long val = strtol(config_.device, &endptr, 10);
+    if (endptr && *endptr == '\0' && endptr != config_.device) {
+        device_index = static_cast<int>(val);
     }
 
     bool opened = false;
@@ -79,9 +79,11 @@ bool CameraCapture::open() {
         pixel_format_ = static_cast<uint32_t>(PixelFormat::BGR24);
     }
 
+    char fmt_str[5];
+    pixelFormatToString(pixel_format_, fmt_str);
     LOG_INFO << "Camera configured: " << actual_width_ << "x" << actual_height_
              << " @ " << actual_fps_ << " fps"
-             << ", format=" << pixelFormatToString(pixel_format_);
+             << ", format=" << fmt_str;
 
     if (actual_width_ != config_.width || actual_height_ != config_.height) {
         LOG_WARN << "Actual resolution (" << actual_width_ << "x" << actual_height_
@@ -115,18 +117,13 @@ bool CameraCapture::isOpened() const {
 }
 
 uint64_t CameraCapture::getTimestampNs() {
-    auto now = std::chrono::steady_clock::now();
-    auto duration = now.time_since_epoch();
-    return std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count();
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL + static_cast<uint64_t>(ts.tv_nsec);
 }
 
 bool CameraCapture::encodeJpeg(const cv::Mat& frame, std::vector<uint8_t>& output) {
-    try {
-        return cv::imencode(".jpg", frame, output, jpeg_params_);
-    } catch (const cv::Exception& e) {
-        LOG_ERROR << "JPEG encoding failed: " << e.what();
-        return false;
-    }
+    return cv::imencode(".jpg", frame, output, jpeg_params_);
 }
 
 void CameraCapture::captureLoop(RingQueue& queue, const std::atomic<bool>& running) {
@@ -139,7 +136,8 @@ void CameraCapture::captureLoop(RingQueue& queue, const std::atomic<bool>& runni
         // Capture frame
         if (!cap_.read(frame)) {
             LOG_WARN << "Failed to read frame from camera";
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            struct timespec ts{0, 10000000L};  // 10 ms
+            nanosleep(&ts, nullptr);
             continue;
         }
 

@@ -9,8 +9,7 @@
 #include "log.hpp"
 
 #include <cstring>
-#include <unistd.h>
-
+#include <stdio.h>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -50,7 +49,7 @@ void TlsClient::logSslErrors(const char* context) {
 }
 
 bool TlsClient::initialize() {
-    if (config_.host.empty() || config_.port == 0) {
+    if (!config_.host || config_.host[0] == '\0' || config_.port == 0) {
         LOG_ERROR << "Invalid TLS client configuration";
         return false;
     }
@@ -78,8 +77,8 @@ bool TlsClient::createSslContext() {
     SSL_CTX_set_min_proto_version(ssl_ctx_, TLS1_2_VERSION);
 
     // Load CA certificates
-    if (!config_.ca_path.empty()) {
-        if (!SSL_CTX_load_verify_locations(ssl_ctx_, config_.ca_path.c_str(), nullptr)) {
+    if (config_.ca_path && config_.ca_path[0] != '\0') {
+        if (!SSL_CTX_load_verify_locations(ssl_ctx_, config_.ca_path, nullptr)) {
             logSslErrors("SSL_CTX_load_verify_locations");
             LOG_ERROR << "Failed to load CA bundle: " << config_.ca_path;
             SSL_CTX_free(ssl_ctx_);
@@ -109,16 +108,17 @@ bool TlsClient::createSslContext() {
     return true;
 }
 
-int TlsClient::createTcpConnection(const std::string& host, uint16_t port) {
+int TlsClient::createTcpConnection(const char* host, uint16_t port) {
     struct addrinfo hints{}, *res, *rp;
     int sockfd = -1;
-    std::string port_str = std::to_string(port);
+    char port_str[8];
+    snprintf(port_str, sizeof(port_str), "%u", port);
 
-    hints.ai_family = AF_UNSPEC;      // IPv4 or IPv6
+    hints.ai_family   = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_protocol = IPPROTO_TCP;
 
-    int ret = getaddrinfo(host.c_str(), port_str.c_str(), &hints, &res);
+    int ret = getaddrinfo(host, port_str, &hints, &res);
     if (ret != 0) {
         LOG_ERROR << "getaddrinfo(" << host << ":" << port << "): " << gai_strerror(ret);
         return -1;
@@ -169,14 +169,14 @@ bool TlsClient::tlsConnect() {
     }
 
     // Set SNI hostname
-    if (!SSL_set_tlsext_host_name(ssl_, config_.host.c_str())) {
+    if (!SSL_set_tlsext_host_name(ssl_, config_.host)) {
         logSslErrors("SSL_set_tlsext_host_name");
     }
 
     // Set hostname verification
     X509_VERIFY_PARAM* param = SSL_get0_param(ssl_);
     X509_VERIFY_PARAM_set_hostflags(param, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
-    if (!X509_VERIFY_PARAM_set1_host(param, config_.host.c_str(), 0)) {
+    if (!X509_VERIFY_PARAM_set1_host(param, config_.host, 0)) {
         logSslErrors("X509_VERIFY_PARAM_set1_host");
         SSL_free(ssl_);
         ssl_ = nullptr;

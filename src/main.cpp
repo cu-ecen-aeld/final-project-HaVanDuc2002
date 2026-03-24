@@ -73,17 +73,17 @@ constexpr int DEFAULT_JPEG_QUALITY = 85;
 // Program configuration
 struct Config {
     // Camera settings
-    std::string device = DEFAULT_DEVICE;
-    uint16_t width = DEFAULT_WIDTH;
-    uint16_t height = DEFAULT_HEIGHT;
-    uint32_t fps = DEFAULT_FPS;
-    bool use_jpeg = true;
-    int jpeg_quality = DEFAULT_JPEG_QUALITY;
+    const char* device     = DEFAULT_DEVICE;
+    uint16_t    width      = DEFAULT_WIDTH;
+    uint16_t    height     = DEFAULT_HEIGHT;
+    uint32_t    fps        = DEFAULT_FPS;
+    bool        use_jpeg   = true;
+    int         jpeg_quality = DEFAULT_JPEG_QUALITY;
 
     // Network settings
-    std::string host;
-    uint16_t port = DEFAULT_PORT;
-    std::string ca_path;
+    const char* host       = nullptr;
+    uint16_t    port       = DEFAULT_PORT;
+    const char* ca_path    = nullptr;
 
     // Queue settings
     size_t queue_size = DEFAULT_QUEUE_SIZE;
@@ -100,33 +100,37 @@ static void signalHandler(int sig) {
 
 // Print usage
 static void printUsage(const char* prog) {
-    std::cerr <<
-        "Usage: " << prog << " [options]\n"
+    fprintf(stderr,
+        "Usage: %s [options]\n"
         "\n"
         "Camera frame streaming over TLS (OpenCV-based)\n"
         "\n"
         "Camera options:\n"
-        "  --device PATH/INDEX  Camera device or index (default: " << DEFAULT_DEVICE << ")\n"
-        "  --width N            Frame width (default: " << DEFAULT_WIDTH << ")\n"
-        "  --height N           Frame height (default: " << DEFAULT_HEIGHT << ")\n"
-        "  --fps N              Frames per second (default: " << DEFAULT_FPS << ")\n"
+        "  --device PATH/INDEX  Camera device or index (default: %s)\n"
+        "  --width N            Frame width (default: %u)\n"
+        "  --height N           Frame height (default: %u)\n"
+        "  --fps N              Frames per second (default: %u)\n"
         "  --no-jpeg            Send raw BGR instead of JPEG\n"
-        "  --jpeg-quality N     JPEG quality 1-100 (default: " << DEFAULT_JPEG_QUALITY << ")\n"
+        "  --jpeg-quality N     JPEG quality 1-100 (default: %d)\n"
         "\n"
         "Network options:\n"
         "  --host HOSTNAME      Remote server hostname (required)\n"
-        "  --port N             Remote server port (default: " << DEFAULT_PORT << ")\n"
+        "  --port N             Remote server port (default: %u)\n"
         "  --ca PATH            CA certificate bundle path (default: system)\n"
         "\n"
         "Other options:\n"
-        "  --queue-size N       Frame queue size (default: " << DEFAULT_QUEUE_SIZE << ")\n"
+        "  --queue-size N       Frame queue size (default: %zu)\n"
         "  --verbose, -v        Enable verbose logging\n"
         "  --help, -h           Show this help\n"
         "\n"
         "Example:\n"
-        "  " << prog << " --device 0 --width 1280 --height 720 \\\n"
+        "  %s --device 0 --width 1280 --height 720 \\\n"
         "     --fps 30 --host stream.example.com --port 4433\n"
-        "\n";
+        "\n",
+        prog,
+        DEFAULT_DEVICE, DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_FPS, DEFAULT_JPEG_QUALITY,
+        DEFAULT_PORT, DEFAULT_QUEUE_SIZE,
+        prog);
 }
 
 // Parse command line arguments
@@ -155,21 +159,21 @@ static bool parseArgs(int argc, char* argv[], Config& config) {
                 config.device = optarg;
                 break;
             case 'W':
-                config.width = static_cast<uint16_t>(std::stoi(optarg));
+                config.width = static_cast<uint16_t>(atoi(optarg));
                 break;
             case 'H':
-                config.height = static_cast<uint16_t>(std::stoi(optarg));
+                config.height = static_cast<uint16_t>(atoi(optarg));
                 break;
             case 'f':
-                config.fps = static_cast<uint32_t>(std::stoi(optarg));
+                config.fps = static_cast<uint32_t>(atoi(optarg));
                 break;
             case 'J':
                 config.use_jpeg = false;
                 break;
             case 'Q':
-                config.jpeg_quality = std::stoi(optarg);
+                config.jpeg_quality = atoi(optarg);
                 if (config.jpeg_quality < 1 || config.jpeg_quality > 100) {
-                    std::cerr << "Error: JPEG quality must be 1-100\n";
+                    fprintf(stderr, "Error: JPEG quality must be 1-100\n");
                     return false;
                 }
                 break;
@@ -177,13 +181,13 @@ static bool parseArgs(int argc, char* argv[], Config& config) {
                 config.host = optarg;
                 break;
             case 'p':
-                config.port = static_cast<uint16_t>(std::stoi(optarg));
+                config.port = static_cast<uint16_t>(atoi(optarg));
                 break;
             case 'c':
                 config.ca_path = optarg;
                 break;
             case 'q':
-                config.queue_size = static_cast<size_t>(std::stoi(optarg));
+                config.queue_size = static_cast<size_t>(atoi(optarg));
                 break;
             case 'v':
                 config.verbose = true;
@@ -196,24 +200,24 @@ static bool parseArgs(int argc, char* argv[], Config& config) {
     }
 
     // Validate required options
-    if (config.host.empty()) {
-        std::cerr << "Error: --host is required\n\n";
+    if (!config.host || config.host[0] == '\0') {
+        fprintf(stderr, "Error: --host is required\n\n");
         printUsage(argv[0]);
         return false;
     }
 
     if (config.width == 0 || config.height == 0) {
-        std::cerr << "Error: invalid dimensions\n";
+        fprintf(stderr, "Error: invalid dimensions\n");
         return false;
     }
 
     if (config.fps == 0) {
-        std::cerr << "Error: invalid fps\n";
+        fprintf(stderr, "Error: invalid fps\n");
         return false;
     }
 
     if (config.queue_size < 2) {
-        std::cerr << "Error: queue size must be at least 2\n";
+        fprintf(stderr, "Error: queue size must be at least 2\n");
         return false;
     }
 

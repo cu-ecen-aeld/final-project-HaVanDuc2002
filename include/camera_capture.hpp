@@ -7,9 +7,8 @@
 #define CAMERA_CAPTURE_HPP
 
 #include <cstdint>
-#include <string>
 #include <atomic>
-#include <memory>
+#include <vector>
 #include <opencv2/opencv.hpp>
 
 namespace streamer {
@@ -19,12 +18,12 @@ class RingQueue;
 
 // Capture configuration
 struct CameraConfig {
-    std::string device;          // Device path or index (e.g., "/dev/video0" or "0")
-    uint16_t width = 1280;       // Requested width
-    uint16_t height = 720;       // Requested height
-    uint32_t fps = 30;           // Requested frame rate
-    bool use_jpeg = true;        // Encode frames as JPEG for efficient transmission
-    int jpeg_quality = 85;       // JPEG quality (1-100)
+    const char* device  = "0";  // Device path or index (e.g., "/dev/video0" or "0")
+    uint16_t width    = 1280;   // Requested width
+    uint16_t height   = 720;    // Requested height
+    uint32_t fps      = 30;     // Requested frame rate
+    bool use_jpeg     = true;   // Encode frames as JPEG for efficient transmission
+    int jpeg_quality  = 85;     // JPEG quality (1-100)
 };
 
 /**

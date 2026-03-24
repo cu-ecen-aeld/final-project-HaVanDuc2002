@@ -94,15 +94,15 @@ inline void initFrameHeader(FrameHeader& hdr,
 }
 
 /**
- * Convert pixel format to string
+ * Convert pixel format fourcc to a null-terminated string.
+ * buf must be at least 5 bytes.
  */
-inline std::string pixelFormatToString(uint32_t format) {
-    char buf[5] = {0};
-    buf[0] = static_cast<char>((format >> 0) & 0xFF);
-    buf[1] = static_cast<char>((format >> 8) & 0xFF);
+inline void pixelFormatToString(uint32_t format, char buf[5]) {
+    buf[0] = static_cast<char>((format >> 0)  & 0xFF);
+    buf[1] = static_cast<char>((format >> 8)  & 0xFF);
     buf[2] = static_cast<char>((format >> 16) & 0xFF);
     buf[3] = static_cast<char>((format >> 24) & 0xFF);
-    return std::string(buf);
+    buf[4] = '\0';
 }
 
 }  // namespace streamer

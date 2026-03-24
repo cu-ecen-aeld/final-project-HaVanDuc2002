@@ -7,9 +7,7 @@
 #define TLS_CLIENT_HPP
 
 #include <cstdint>
-#include <string>
 #include <atomic>
-#include <memory>
 
 #include <openssl/ssl.h>
 
@@ -20,17 +18,17 @@ class RingQueue;
 
 // TLS client configuration
 struct TlsConfig {
-    std::string host;            // Remote hostname
-    uint16_t port = 4433;        // Remote port
-    std::string ca_path;         // Path to CA bundle (empty = default)
+    const char* host    = nullptr; // Remote hostname
+    uint16_t port       = 4433;    // Remote port
+    const char* ca_path = nullptr; // Path to CA bundle (nullptr = system default)
 
     // Reconnect settings
-    uint32_t reconnect_base_ms = 1000;    // Base delay
-    uint32_t reconnect_max_ms = 30000;    // Max delay
-    float reconnect_multiplier = 2.0f;    // Backoff multiplier
+    uint32_t reconnect_base_ms   = 1000;   // Base delay
+    uint32_t reconnect_max_ms    = 30000;  // Max delay
+    float    reconnect_multiplier = 2.0f;  // Backoff multiplier
 
     // Frame info for protocol
-    uint16_t frame_width = 0;
+    uint16_t frame_width  = 0;
     uint16_t frame_height = 0;
     uint32_t pixel_format = 0;
 };
@@ -106,7 +104,7 @@ private:
     bool createSslContext();
 
     // TCP connection
-    int createTcpConnection(const std::string& host, uint16_t port);
+    int createTcpConnection(const char* host, uint16_t port);
 
     // TLS connection
     bool tlsConnect();
