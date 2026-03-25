@@ -18,7 +18,6 @@
  *                     --fps 30 --host example.com --port 4433
  */
 
-#include <string>
 #include <atomic>
 #include <cstring>
 #include <stdlib.h>

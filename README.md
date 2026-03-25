@@ -127,14 +127,6 @@ When deployed via Yocto, configure `/etc/camera-streamer.conf` and manage via th
 | `--queue-size N` | Ring queue capacity (frames) | `128` |
 | `--verbose, -v` | Enable debug logging | disabled |
 
-## Embedded Linux Suitability Notes
-
-- Runtime code paths avoid exceptions and iostream usage.
-- Signal handling uses POSIX `sigaction` with an async-signal-safe handler.
-- Timing/sleep primitives use `clock_gettime` and `nanosleep`.
-- Frame queue uses pre-allocated `mmap` storage and avoids per-frame heap allocations for queue payload.
-- Small STL usage remains in utility code (`log.hpp`) and OpenCV-required vectors for JPEG encoding parameters/payload buffers.
-
 ### Server (`frame_server`)
 
 | Option | Description | Default |

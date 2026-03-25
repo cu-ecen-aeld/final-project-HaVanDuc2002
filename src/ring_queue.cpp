@@ -8,6 +8,7 @@
 
 #include <cstring>
 #include <cerrno>
+#include <new>
 #include <stdlib.h>
 #include <time.h>
 #include <sys/mman.h>
