@@ -66,7 +66,8 @@ Output binaries: `build/camera_streamer` (client), `build/frame_server` (server)
 mkdir -p certs
 openssl req -x509 -newkey rsa:4096 \
     -keyout certs/server.key -out certs/server.crt \
-    -days 365 -nodes -subj '/CN=<YOUR_PC_IP>'
+    -days 365 -nodes -subj '/CN=<YOUR_PC_IP>' \
+    -addext 'subjectAltName=IP:<YOUR_PC_IP>'
 ```
 
 Or use the Makefile target:
@@ -92,7 +93,18 @@ make certs
 scp certs/server.crt root@<RPI_IP>:/etc/camera-streamer-ca.crt
 ```
 
-### Step 4 — Run the client (on the RPi)
+### Step 4 — Sync the RPi clock
+
+The RPi has no battery-backed RTC and defaults to the Yocto build date on first boot. TLS certificate validation will fail if the RPi's time is behind the cert's `notBefore` date.
+
+```bash
+# On the RPi
+date -s "$(date +'%Y-%m-%d %H:%M:%S' --date='TZ="UTC"')"
+# Or manually:
+date -s "2026-03-25 12:00:00"
+```
+
+### Step 5 — Run the client (on the RPi)
 
 ```bash
 camera_streamer \
@@ -107,6 +119,76 @@ When deployed via Yocto, configure `/etc/camera-streamer.conf` and manage via th
 
 ```bash
 /etc/init.d/camera-streamer start
+```
+
+---
+
+### Running inside a VMware VM
+
+When the server runs inside a VMware VM (NAT mode), the RPi is on a physical LAN and cannot directly reach the VM's virtual IP. Use an **SSH reverse tunnel** to bridge the two networks — no Windows port-forwarding required.
+
+#### Step 1 — Identify the Windows host's physical LAN IP
+
+On the RPi, check the ARP table to find which IP the SSH connection comes from:
+```bash
+cat /proc/net/arp
+```
+The host machine's physical LAN IP (e.g. `10.x.x.x`) will appear there. Alternatively run `ipconfig /all` on Windows and look for the physical WiFi/Ethernet adapter.
+
+#### Step 2 — Verify the RPi can reach the Windows host
+
+```bash
+# On the RPi
+ping <WINDOWS_HOST_IP>
+```
+
+#### Step 3 — Generate the cert for `127.0.0.1`
+
+Since the RPi will connect through a localhost tunnel, generate the cert with `CN=127.0.0.1`:
+
+```bash
+# On the VM
+openssl req -x509 -newkey rsa:4096 \
+    -keyout certs/server.key -out certs/server.crt \
+    -days 365 -nodes \
+    -subj '/CN=127.0.0.1' \
+    -addext 'subjectAltName=IP:127.0.0.1'
+scp certs/server.crt root@<RPI_IP>:/etc/camera-streamer-ca.crt
+```
+
+#### Step 4 — Start the frame server on the VM
+
+```bash
+./build/frame_server --cert certs/server.crt --key certs/server.key \
+    --port 4433 --output /tmp/frames --verbose
+```
+
+#### Step 5 — Open an SSH reverse tunnel from the VM to the RPi
+
+```bash
+# On the VM — leave this running
+ssh -R 4433:localhost:4433 -N root@<RPI_IP>
+```
+
+This makes `localhost:4433` on the RPi forward through SSH to `localhost:4433` on the VM.
+
+#### Step 6 — Run the client on the RPi (connecting to localhost)
+
+```bash
+camera_streamer \
+    --device 0 \
+    --width 1280 --height 720 --fps 30 \
+    --host 127.0.0.1 --port 4433 \
+    --ca /etc/camera-streamer-ca.crt \
+    --verbose
+```
+
+The traffic flow is:
+```
+RPi camera_streamer
+    → 127.0.0.1:4433 (SSH tunnel on RPi)
+    → SSH → VM localhost:4433
+    → frame_server
 ```
 
 ## Command Line Options
