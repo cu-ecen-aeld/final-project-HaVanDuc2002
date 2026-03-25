@@ -11,6 +11,8 @@
 #include <cstring>
 #include <stdio.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -124,7 +126,7 @@ int TlsClient::createTcpConnection(const char* host, uint16_t port) {
         return -1;
     }
 
-    // Try each address
+    // Try each address with a non-blocking connect + poll timeout
     for (rp = res; rp != nullptr; rp = rp->ai_next) {
         sockfd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
         if (sockfd < 0) continue;
@@ -133,12 +135,52 @@ int TlsClient::createTcpConnection(const char* host, uint16_t port) {
         int flag = 1;
         setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
 
-        if (connect(sockfd, rp->ai_addr, rp->ai_addrlen) == 0) {
-            break;  // Success
+        // Switch to non-blocking so connect() returns immediately
+        int saved_flags = fcntl(sockfd, F_GETFL, 0);
+        fcntl(sockfd, F_SETFL, saved_flags | O_NONBLOCK);
+
+        int cret = connect(sockfd, rp->ai_addr, rp->ai_addrlen);
+        if (cret == 0) {
+            // Connected immediately (rare on non-local)
+            fcntl(sockfd, F_SETFL, saved_flags);
+            break;
         }
 
-        close(sockfd);
-        sockfd = -1;
+        if (errno != EINPROGRESS) {
+            LOG_DEBUG << "connect() failed immediately: " << strerror(errno);
+            close(sockfd);
+            sockfd = -1;
+            continue;
+        }
+
+        // Wait for the socket to become writable (= connect done)
+        struct pollfd pfd;
+        pfd.fd     = sockfd;
+        pfd.events = POLLOUT;
+        int pret = poll(&pfd, 1, static_cast<int>(config_.connect_timeout_ms));
+
+        if (pret <= 0) {
+            // pret == 0: timeout;  pret < 0: poll error
+            LOG_WARN << "connect() timed out after " << config_.connect_timeout_ms << " ms";
+            close(sockfd);
+            sockfd = -1;
+            continue;
+        }
+
+        // Check whether the connect actually succeeded
+        int sock_err = 0;
+        socklen_t errlen = sizeof(sock_err);
+        getsockopt(sockfd, SOL_SOCKET, SO_ERROR, &sock_err, &errlen);
+        if (sock_err != 0) {
+            LOG_DEBUG << "connect() error: " << strerror(sock_err);
+            close(sockfd);
+            sockfd = -1;
+            continue;
+        }
+
+        // Restore blocking mode — SSL requires it
+        fcntl(sockfd, F_SETFL, saved_flags);
+        break;
     }
 
     freeaddrinfo(res);

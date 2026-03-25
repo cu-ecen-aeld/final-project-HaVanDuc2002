@@ -22,6 +22,9 @@ struct TlsConfig {
     uint16_t port       = 4433;    // Remote port
     const char* ca_path = nullptr; // Path to CA bundle (nullptr = system default)
 
+    // Connection settings
+    uint32_t connect_timeout_ms  = 5000;   // TCP connect timeout
+
     // Reconnect settings
     uint32_t reconnect_base_ms   = 1000;   // Base delay
     uint32_t reconnect_max_ms    = 30000;  // Max delay
