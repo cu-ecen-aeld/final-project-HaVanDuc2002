@@ -4,18 +4,19 @@
  *
  * Log levels: ERROR, WARN, INFO, DEBUG
  * Output format: [LEVEL] [timestamp] [file:line] message
+ *
+ * Uses a fixed 512-byte stack buffer + snprintf overloads — no sstream/heap alloc.
  */
 
 #ifndef LOG_HPP
 #define LOG_HPP
 
-#include <sstream>
 #include <cstring>
-#include <cstdio>
 #include <unistd.h>
 #include <fcntl.h>
 #include <time.h>
 #include <pthread.h>
+#include <stdio.h>
 
 namespace streamer {
 
@@ -35,13 +36,12 @@ inline LogLevel g_log_level = LogLevel::Info;
 inline pthread_mutex_t g_log_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // Log file descriptor — opened once via pthread_once
-inline int         g_log_fd   = -1;
+inline int            g_log_fd   = -1;
 inline pthread_once_t g_log_once = PTHREAD_ONCE_INIT;
 
 inline void openLogFile() {
     g_log_fd = open(LOG_FILE_PATH, O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (g_log_fd < 0) {
-        // Fall back to stderr if the log file cannot be opened
         g_log_fd = STDERR_FILENO;
     }
 }
@@ -56,20 +56,16 @@ inline const char* extractFilename(const char* path) {
     return file ? file + 1 : path;
 }
 
-// Build timestamp string using POSIX clock_gettime + localtime_r
-inline std::string getTimestamp() {
+// Fill buf (>= 32 bytes) with "YYYY-MM-DD HH:MM:SS.mmm"
+inline void fillTimestamp(char* buf, size_t bufsize) {
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
-
     struct tm tm_info;
     localtime_r(&ts.tv_sec, &tm_info);
-
     char date_buf[24];
     strftime(date_buf, sizeof(date_buf), "%Y-%m-%d %H:%M:%S", &tm_info);
-
-    char result[32];
-    snprintf(result, sizeof(result), "%s.%03ld", date_buf, ts.tv_nsec / 1000000L);
-    return std::string(result);
+    snprintf(buf, bufsize, "%s.%03d",
+             date_buf, (int)(ts.tv_nsec / 1000000L));
 }
 
 inline const char* levelToString(LogLevel level) {
@@ -82,45 +78,93 @@ inline const char* levelToString(LogLevel level) {
     }
 }
 
-// Stream-style log message — writes to /var/tmp/camera_log on destruction
+// Fixed-buffer log message — writes to /var/tmp/camera_log on destruction.
+// No heap allocation; operator<< overloads cover all primitive types used in
+// the codebase (const char*, char, bool, int, long, unsigned variants, double).
 class LogMessage {
 public:
+    static constexpr size_t BUF_SIZE = 512;
+
     LogMessage(LogLevel level, const char* file, int line)
-        : level_(level), should_log_(level <= g_log_level) {
+        : should_log_(level <= g_log_level), pos_(0), level_(level) {
         if (should_log_) {
-            stream_ << "[" << levelToString(level) << "] "
-                    << "[" << getTimestamp()        << "] "
-                    << "[" << extractFilename(file) << ":" << line << "] ";
+            char ts[32];
+            fillTimestamp(ts, sizeof(ts));
+            int n = snprintf(buf_, BUF_SIZE - 1, "[%s] [%s] [%s:%d] ",
+                             levelToString(level), ts,
+                             extractFilename(file), line);
+            if (n > 0) pos_ = (size_t)n < BUF_SIZE - 1 ? (size_t)n : BUF_SIZE - 2;
         }
     }
 
     ~LogMessage() {
         if (should_log_) {
-            stream_ << '\n';
-            std::string msg = stream_.str();
+            if (pos_ < BUF_SIZE - 1) buf_[pos_++] = '\n';
+            buf_[pos_] = '\0';
             ensureLogOpen();
             pthread_mutex_lock(&g_log_mutex);
-            write(g_log_fd, msg.c_str(), msg.size());   // file
-            write(STDERR_FILENO, msg.c_str(), msg.size()); // terminal
+            // Write to log file /var/tmp/camera_log
+            if (write(g_log_fd, buf_, pos_) < 0) {}
+            // Write to terminal (stderr) — skip if log fd IS stderr (open failed)
+            if (g_log_fd != STDERR_FILENO) {
+                if (write(STDERR_FILENO, buf_, pos_) < 0) {}
+            }
             pthread_mutex_unlock(&g_log_mutex);
         }
     }
 
+    // Non-copyable — log objects are always temporaries
+    LogMessage(const LogMessage&)            = delete;
+    LogMessage& operator=(const LogMessage&) = delete;
+
+    LogMessage& operator<<(const char* s) {
+        if (should_log_ && s) append_s(s);
+        return *this;
+    }
+    LogMessage& operator<<(char c) {
+        if (should_log_ && pos_ < BUF_SIZE - 2) buf_[pos_++] = c;
+        return *this;
+    }
+    LogMessage& operator<<(bool v)               { return *this << (v ? "true" : "false"); }
+    LogMessage& operator<<(int v)                { return appendFmt("%d",   v); }
+    LogMessage& operator<<(unsigned int v)       { return appendFmt("%u",   v); }
+    LogMessage& operator<<(long v)               { return appendFmt("%ld",  v); }
+    LogMessage& operator<<(unsigned long v)      { return appendFmt("%lu",  v); }
+    LogMessage& operator<<(long long v)          { return appendFmt("%lld", v); }
+    LogMessage& operator<<(unsigned long long v) { return appendFmt("%llu", v); }
+    LogMessage& operator<<(double v)             { return appendFmt("%.2f", v); }
+
+protected:
+    bool   should_log_;
+    char   buf_[BUF_SIZE];
+    size_t pos_;
+
+private:
+    LogLevel level_;  // declared after should_log_ to match constructor init order
+
+    void append_s(const char* s) {
+        if (pos_ >= BUF_SIZE - 1) return;
+        int n = snprintf(buf_ + pos_, BUF_SIZE - 1 - pos_, "%s", s);
+        if (n > 0) {
+            pos_ += (size_t)n;
+            if (pos_ >= BUF_SIZE - 1) pos_ = BUF_SIZE - 2;
+        }
+    }
+
     template<typename T>
-    LogMessage& operator<<(const T& value) {
-        if (should_log_) {
-            stream_ << value;
+    LogMessage& appendFmt(const char* fmt, T v) {
+        if (should_log_ && pos_ < BUF_SIZE - 1) {
+            int n = snprintf(buf_ + pos_, BUF_SIZE - 1 - pos_, fmt, v);
+            if (n > 0) {
+                pos_ += (size_t)n;
+                if (pos_ >= BUF_SIZE - 1) pos_ = BUF_SIZE - 2;
+            }
         }
         return *this;
     }
-
-private:
-    LogLevel           level_;
-    bool               should_log_;
-    std::ostringstream stream_;
 };
 
-// Errno variant — appends strerror(errno) to the message
+// Errno variant — appends ": <strerror> (errno=N)" before the final write
 class LogErrnoMessage : public LogMessage {
 public:
     LogErrnoMessage(LogLevel level, const char* file, int line, int err_num)
